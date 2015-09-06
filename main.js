@@ -8,17 +8,17 @@
     getInitialState: function() {
       return {
         fileList: [],
-        createFile: _.debounce(this.createFile, 500, true)
+        createFile: _.debounce(this.createFile, 500, true),
+        selectedFile: ""
       };
+    },
+    newFileText: function() {
+      return "Date Created: " + (new Date()) + "\n";
     },
     componentDidMount: function() {
       return this.props.dbClient.authenticate((function(_this) {
         return function(error, data) {
           return _this.props.dbClient.readdir("/", function(error, entries) {
-            if (error) {
-              console.log(error);
-              return;
-            }
             return _this.setState({
               fileList: entries
             });
@@ -27,18 +27,18 @@
       })(this));
     },
     createFile: function() {
-      var fileName, now;
+      var currentFileList, fileName, now;
       now = (new Date()).toISOString().replace(/:/g, ".");
       fileName = now + ".txt";
+      currentFileList = this.state.fileList;
+      currentFileList.unshift(fileName);
+      this.setState(_.extend(currentFileList, {
+        selectedFile: fileName
+      }));
       return this.props.dbClient.authenticate((function(_this) {
         return function(error, data) {
-          return _this.props.dbClient.writeFile(fileName, " ", function(error, stat) {
-            var currentFileList;
-            console.log(fileName);
-            currentFileList = _this.state.fileList;
-            currentFileList.push(fileName);
-            _this.props.onSelect(fileName);
-            return _this.setState(currentFileList);
+          return _this.props.dbClient.writeFile(fileName, _this.newFileText(), function() {
+            return _this.props.onSelect(fileName);
           });
         };
       })(this));
@@ -48,15 +48,27 @@
         className: "list-group"
       }, d.li({
         className: "list-group-item",
+        onTouchEnd: this.state.createFile,
         onClick: this.state.createFile
       }, "Create New Entry"), this.state.fileList.map((function(_this) {
         return function(entry, i) {
+          var isActive;
+          isActive = _this.state.selectedFile === entry ? 'active' : '';
           return d.li({
-            className: "list-group-item",
             key: i,
             onClick: function() {
+              _this.setState({
+                selectedFile: entry
+              });
               return _this.props.onSelect(entry);
-            }
+            },
+            onTouchEnd: function() {
+              _this.setState({
+                selectedFile: entry
+              });
+              return _this.props.onSelect(entry);
+            },
+            className: "hidden-xs list-group-item " + isActive
           }, entry);
         };
       })(this)));
@@ -79,11 +91,17 @@
 
   CommentBox = React.createFactory(React.createClass({
     getInitialState: function() {
+      return _.extend({
+        userInfo: {
+          name: "there"
+        }
+      }, this.nullState());
+    },
+    nullState: function() {
       return {
         uploader: _.throttle(this.uploadToDropbox, 5000),
         comment: "",
         geolocation: null,
-        userInfo: {},
         lastUpdated: ""
       };
     },
@@ -95,20 +113,19 @@
     componentDidMount: function() {
       return this.props.dbClient.authenticate((function(_this) {
         return function(error, data) {
-          if (error) {
-            console.log(error);
-          }
           _this.props.dbClient.getAccountInfo(function(error, userInfo) {
             return _this.setState({
               userInfo: userInfo
             });
           });
           if (_this.props.fileToLoad) {
-            console.log("did mount filetoload", _this.props.fileToLoad);
+            _this.setState({
+              comment: "Loading..."
+            });
             return _this.props.dbClient.readFile(_this.props.fileToLoad, function(error, data) {
-              return _this.setState({
+              return _this.setState(_.extend(_this.nullState(), {
                 comment: data
-              }, function() {
+              }), function() {
                 return _this.props.setCompiledComment(_this.compileText());
               });
             });
@@ -117,15 +134,17 @@
       })(this));
     },
     componentWillReceiveProps: function(nextProps) {
-      console.log("nextProps", nextProps.fileToLoad);
       if (nextProps.fileToLoad !== this.props.fileToLoad) {
-        console.log("should be loading new file");
+        this.uploadToDropbox();
+        this.setState({
+          comment: "Loading..."
+        });
         return this.props.dbClient.authenticate((function(_this) {
           return function(error, data) {
             return _this.props.dbClient.readFile(nextProps.fileToLoad, function(error, data) {
-              return _this.setState({
+              return _this.setState(_.extend(_this.nullState(), {
                 comment: data
-              }, function() {
+              }), function() {
                 return _this.props.setCompiledComment(_this.compileText());
               });
             });
@@ -135,20 +154,15 @@
     },
     compileText: function() {
       var to_ret;
-      to_ret = "";
+      to_ret = this.state.comment;
       if (this.state.geolocation) {
-        to_ret = "Location: " + this.state.geolocation.latitude + ", " + this.state.geolocation.longitude;
+        to_ret = ("Location: " + this.state.geolocation.latitude + ", " + this.state.geolocation.longitude + "  \n\n") + this.state.comment;
       }
-      to_ret = to_ret + "\n\n" + this.state.comment;
       return to_ret;
     },
     uploadToDropbox: function() {
-      console.log("uploadToDropbox");
       return this.props.dbClient.writeFile(this.props.fileToLoad, this.compileText(), (function(_this) {
         return function(error, stat) {
-          if (error) {
-            console.log(error);
-          }
           return _this.setState({
             lastUpdated: stat.modifiedAt
           });
@@ -159,16 +173,49 @@
       if (navigator.geolocation) {
         return navigator.geolocation.getCurrentPosition((function(_this) {
           return function(position) {
-            console.log(position.coords);
             return _this.setState({
               geolocation: {
                 latitude: position.coords.latitude,
                 longitude: position.coords.longitude
               }
+            }, function() {
+              return _this.props.setCompiledComment(_this.compileText());
             });
           };
         })(this));
       }
+    },
+    buttonOptions: function() {
+      return d.div({
+        className: "btn-group",
+        role: "group"
+      }, this.state.geolocation ? d.button({
+        type: "button",
+        className: "btn btn-default",
+        onClick: (function(_this) {
+          return function() {
+            return _this.setState({
+              geolocation: null
+            }, function() {
+              return _this.props.setCompiledComment(_this.compileText());
+            });
+          };
+        })(this),
+        onTouchEnd: (function(_this) {
+          return function() {
+            return _this.setState({
+              geolocation: null
+            }, function() {
+              return _this.props.setCompiledComment(_this.compileText());
+            });
+          };
+        })(this)
+      }, "Remove Location") : d.button({
+        type: "button",
+        className: "btn btn-default",
+        onClick: this.getLocation,
+        onTouchEnd: this.getLocation
+      }, "Add Location"));
     },
     handleChange: function(e) {
       this.setState({
@@ -186,7 +233,7 @@
         rows: 20,
         onChange: this.handleChange,
         value: this.state.comment
-      }), d.p({}, "Last Updated: " + this.state.lastUpdated)));
+      }), d.p({}, "Last Updated: " + this.state.lastUpdated), this.buttonOptions()));
     }
   }));
 
@@ -198,7 +245,6 @@
       };
     },
     onSelect: function(file) {
-      console.log("onselect", file);
       return this.setState({
         currentFile: file
       });
@@ -233,7 +279,7 @@
   $(function() {
     var client, element;
     client = new Dropbox.Client({
-      key: "r8bf46heo7t3ley"
+      key: ""
     });
     element = React.createElement(Page, {
       dbClient: client

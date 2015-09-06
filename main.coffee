@@ -4,33 +4,42 @@ FileList = React.createFactory React.createClass
   getInitialState: ->
     fileList: []
     createFile: _.debounce(@createFile, 500, true)
+    selectedFile: ""
+
+  newFileText: ->
+    "Date Created: #{new Date()}\n"
 
   componentDidMount: ->
     @props.dbClient.authenticate (error, data) =>
       @props.dbClient.readdir "/", (error, entries) =>
-        if error
-          console.log error
-          return
         @setState fileList: entries
 
   createFile: ->
     now = (new Date()).toISOString().replace(/:/g, ".")
     fileName = "#{now}.txt"
+    currentFileList = @state.fileList
+    currentFileList.unshift fileName
+    @setState _.extend currentFileList, {selectedFile: fileName}
+
     @props.dbClient.authenticate (error, data) =>
-      @props.dbClient.writeFile fileName, " ", (error, stat) =>
-        console.log fileName
-        currentFileList = @state.fileList
-        currentFileList.push fileName
+      @props.dbClient.writeFile fileName, @newFileText(), =>
         @props.onSelect fileName
-        @setState currentFileList
 
   render: ->
     d.ul {className: "list-group"},
-      d.li {className: "list-group-item", onClick: @state.createFile }, "Create New Entry"
+      d.li {className: "list-group-item", onTouchEnd: @state.createFile, onClick: @state.createFile }, "Create New Entry"
       @state.fileList.map (entry, i) =>
-        d.li {className: "list-group-item", key: i, onClick: => @props.onSelect entry }, entry
-
-
+        isActive = if @state.selectedFile == entry then 'active' else ''
+        d.li {
+          key: i
+          onClick: =>
+            @setState selectedFile: entry
+            @props.onSelect entry
+          onTouchEnd: =>
+            @setState selectedFile: entry
+            @props.onSelect entry
+          className: "hidden-xs list-group-item #{isActive}"
+        }, entry
 
 RenderedCommentBox = React.createFactory React.createClass
   render: ->
@@ -41,10 +50,12 @@ RenderedCommentBox = React.createFactory React.createClass
 
 CommentBox = React.createFactory React.createClass
   getInitialState: ->
+    _.extend(userInfo: {name: "there"}, @nullState())
+
+  nullState: ->
     uploader: _.throttle(@uploadToDropbox, 5000)
     comment: ""
     geolocation: null
-    userInfo: {}
     lastUpdated: ""
 
   getDefaultProps: ->
@@ -52,47 +63,62 @@ CommentBox = React.createFactory React.createClass
 
   componentDidMount: ->
     @props.dbClient.authenticate (error, data) =>
-      console.log(error) if error
       @props.dbClient.getAccountInfo (error, userInfo) =>
         @setState userInfo: userInfo
       if @props.fileToLoad
-        console.log "did mount filetoload", @props.fileToLoad
+        @setState comment: "Loading..."
         @props.dbClient.readFile @props.fileToLoad, (error, data) =>
-          @setState comment: data, =>
+          @setState _.extend(@nullState(), {comment: data}), =>
             @props.setCompiledComment @compileText()
 
   componentWillReceiveProps: (nextProps) ->
-    console.log "nextProps", nextProps.fileToLoad
     if nextProps.fileToLoad != @props.fileToLoad
-      console.log "should be loading new file"
+      @uploadToDropbox()
+      @setState comment: "Loading..."
       @props.dbClient.authenticate (error, data) =>
         @props.dbClient.readFile nextProps.fileToLoad, (error, data) =>
-          @setState comment: data, =>
+          @setState _.extend(@nullState(), {comment: data}), =>
             @props.setCompiledComment @compileText()
 
   compileText: ->
-    to_ret = ""
+    to_ret = @state.comment
     if @state.geolocation
-      to_ret = """
-Location: #{@state.geolocation.latitude}, #{@state.geolocation.longitude}
-"""
-    to_ret = to_ret + "\n\n" + @state.comment
+      to_ret = "Location: #{@state.geolocation.latitude}, #{@state.geolocation.longitude}  \n\n" + @state.comment
     to_ret
 
   uploadToDropbox: ->
-    console.log "uploadToDropbox"
     @props.dbClient.writeFile(@props.fileToLoad, @compileText(), (error, stat) =>
-      if error
-        console.log error
       @setState lastUpdated: stat.modifiedAt
     )
 
   getLocation: ->
     if navigator.geolocation
-      navigator.geolocation.getCurrentPosition((position) =>
-        console.log position.coords
-        @setState geolocation: {latitude: position.coords.latitude, longitude: position.coords.longitude}
-      )
+      navigator.geolocation.getCurrentPosition (position) =>
+        @setState(
+          geolocation: {
+            latitude: position.coords.latitude
+            longitude: position.coords.longitude
+          }, => @props.setCompiledComment @compileText())
+
+
+  buttonOptions: ->
+    d.div {className: "btn-group", role: "group"},
+      if @state.geolocation
+        d.button {
+          type: "button",
+          className: "btn btn-default"
+          onClick: =>
+            @setState({geolocation: null}, => @props.setCompiledComment @compileText())
+          onTouchEnd: =>
+            @setState({geolocation: null}, => @props.setCompiledComment @compileText())
+        }, "Remove Location"
+      else
+        d.button {
+          type: "button",
+          className: "btn btn-default"
+          onClick: @getLocation
+          onTouchEnd: @getLocation
+        }, "Add Location"
 
   handleChange: (e) ->
     @setState comment: e.target.value, =>
@@ -101,11 +127,11 @@ Location: #{@state.geolocation.latitude}, #{@state.geolocation.longitude}
 
   render: ->
     d.div {},
-      # d.button {onClick: @getLocation}, "Click me!"
       d.div {},
         d.p {}, "Hello #{@state.userInfo.name}"
         d.textarea {cols: 80, rows: 20, onChange: @handleChange, value: @state.comment}
         d.p {}, "Last Updated: #{@state.lastUpdated}"
+        @buttonOptions()
 
 
 Page = React.createClass
@@ -114,7 +140,6 @@ Page = React.createClass
     compiledComment: ""
 
   onSelect: (file) ->
-    console.log "onselect", file
     @setState currentFile: file
   setCompiledComment: (comment) ->
     @setState compiledComment: comment
